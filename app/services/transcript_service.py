@@ -1,7 +1,7 @@
-"""Transcript Service.
+"""Transcript Service (OOP Architecture with Pydantic).
 
-Converts YouTube video audio/knowledge into clean text using youtube-transcript-api.
-Can be used independently or combined with YouTube RSS video discovery.
+Extracts spoken transcript knowledge from YouTube videos using youtube-transcript-api.
+Provides clean OOP classes, Pydantic data schemas, and proxy resilience.
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ import argparse
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
-from pydantic import BaseModel, Field
+from typing import Any, List, Optional, Tuple
+
 from youtube_transcript_api import (
     CouldNotRetrieveTranscript,
     IpBlocked,
@@ -24,6 +24,12 @@ from youtube_transcript_api import (
 )
 from youtube_transcript_api.proxies import GenericProxyConfig
 
+from app.models.youtube import (
+    TranscriptSnippet,
+    VideoTranscript,
+    YouTubeVideo,
+)
+
 logger = logging.getLogger("ai_news.transcript")
 logging.basicConfig(
     level=logging.INFO,
@@ -31,38 +37,12 @@ logging.basicConfig(
 )
 
 
-class VideoTranscript(BaseModel):
-    """Clean representation of extracted video transcript knowledge."""
-
-    video_id: str
-    available: bool = Field(default=False, description="Whether transcript retrieval succeeded")
-    text: str = Field(default="", description="Full aggregated transcript text")
-    word_count: int = Field(default=0, description="Total words in transcript")
-    language: Optional[str] = Field(default=None, description="Language name")
-    language_code: Optional[str] = Field(default=None, description="Language ISO code")
-    is_generated: bool = Field(default=False, description="Whether transcript is auto-generated")
-    error: Optional[str] = Field(default=None, description="Reason if transcript was not available")
-
-
-class TranscriptService:
-    """Service to fetch and convert YouTube video speech into text."""
-
-    def __init__(self, proxy_url: Optional[str] = None) -> None:
-        """Initialize TranscriptService with optional proxy support to prevent IP bans.
-
-        Can be provided directly or via YOUTUBE_PROXY / HTTPS_PROXY env vars.
-        """
-        active_proxy = proxy_url or os.getenv("YOUTUBE_PROXY") or os.getenv("HTTPS_PROXY")
-        proxy_config = None
-        if active_proxy:
-            proxy_config = GenericProxyConfig(http_url=active_proxy, https_url=active_proxy)
-            logger.info("Using configured proxy for YouTube transcript requests: %s", active_proxy)
-
-        self.api = YouTubeTranscriptApi(proxy_config=proxy_config)
+class TranscriptIdParser:
+    """Helper class to parse and validate YouTube video identifiers."""
 
     @staticmethod
     def extract_video_id(video_input: str) -> str:
-        """Extract a video ID from a raw ID or full YouTube URL.
+        """Extract a clean video ID from raw ID, watch URL, short URL, or embed link.
 
         Examples:
             - 'CWdTBLsbaQs' -> 'CWdTBLsbaQs'
@@ -72,16 +52,16 @@ class TranscriptService:
         """
         cleaned = video_input.strip()
 
-        # If it's already a raw ID without URL symbols
+        # If it's already a clean ID string without URL delimiters
         if not any(c in cleaned for c in "/?=&:") and 6 <= len(cleaned) <= 30:
             return cleaned
 
-        # Standard watch URL: ?v=VIDEO_ID
+        # Watch URL: ?v=VIDEO_ID
         match = re.search(r"[?&]v=([a-zA-Z0-9_-]{11})", cleaned)
         if match:
             return match.group(1)
 
-        # Short URL: youtu.be/VIDEO_ID or youtube.com/shorts/VIDEO_ID
+        # Short URL or Shorts: youtu.be/ID or /shorts/ID
         match = re.search(r"(?:youtu\.be/|/shorts/|/embed/)([a-zA-Z0-9_-]{11})", cleaned)
         if match:
             return match.group(1)
@@ -93,56 +73,98 @@ class TranscriptService:
 
         raise ValueError(f"Could not extract a valid YouTube video ID from: '{video_input}'")
 
+
+class TranscriptCleaner:
+    """Helper class to clean and format transcript text."""
+
+    @staticmethod
+    def clean(snippets: List[Any]) -> Tuple[str, List[TranscriptSnippet]]:
+        """Clean raw snippet objects into normalized text and Pydantic TranscriptSnippet models."""
+        pydantic_snippets: List[TranscriptSnippet] = []
+        raw_pieces: List[str] = []
+
+        for s in snippets:
+            text = getattr(s, "text", "") or ""
+            text = text.strip()
+            if not text:
+                continue
+
+            raw_pieces.append(text)
+            start = float(getattr(s, "start", 0.0))
+            duration = float(getattr(s, "duration", 0.0))
+            pydantic_snippets.append(
+                TranscriptSnippet(start=start, duration=duration, text=text)
+            )
+
+        combined = " ".join(raw_pieces)
+        normalized = re.sub(r"\s+", " ", combined).strip()
+        return normalized, pydantic_snippets
+
+
+class TranscriptService:
+    """Object-Oriented Service to convert YouTube video speech into text knowledge."""
+
+    def __init__(self, proxy_url: Optional[str] = None) -> None:
+        """Initialize TranscriptService with optional proxy configuration.
+
+        Args:
+            proxy_url: Optional HTTP/HTTPS proxy string. Defaults to YOUTUBE_PROXY or HTTPS_PROXY env var.
+        """
+        active_proxy = proxy_url or os.getenv("YOUTUBE_PROXY") or os.getenv("HTTPS_PROXY")
+        proxy_config = None
+        if active_proxy:
+            proxy_config = GenericProxyConfig(http_url=active_proxy, https_url=active_proxy)
+            logger.info("TranscriptService initialized with proxy: %s", active_proxy)
+
+        self.api = YouTubeTranscriptApi(proxy_config=proxy_config)
+        self.id_parser = TranscriptIdParser()
+        self.cleaner = TranscriptCleaner()
+
     def get_transcript(
         self,
         video_input: str,
         languages: Tuple[str, ...] = ("en", "en-US", "en-GB"),
     ) -> VideoTranscript:
-        """Fetch transcript for a given video ID or URL.
-
-        Args:
-            video_input: 11-char video ID or any YouTube video URL.
-            languages: Tuple of language codes in order of preference.
-
-        Returns:
-            VideoTranscript object containing text, word count, and metadata.
-        """
-        video_id = self.extract_video_id(video_input)
+        """Fetch transcript for a given video ID or URL, returning a Pydantic VideoTranscript model."""
+        video_id = self.id_parser.extract_video_id(video_input)
 
         try:
-            # 1. Try direct fetch with requested languages
+            # 1. Primary attempt: fetch with specified languages
             fetched = self.api.fetch(video_id, languages=languages)
-            text = self._clean_transcript_text(fetched.snippets)
+            clean_text, snippets = self.cleaner.clean(fetched.snippets)
 
             return VideoTranscript(
                 video_id=video_id,
                 available=True,
-                text=text,
-                word_count=len(text.split()),
+                text=clean_text,
                 language=fetched.language,
                 language_code=fetched.language_code,
                 is_generated=fetched.is_generated,
+                word_count=len(clean_text.split()),
+                character_count=len(clean_text),
+                snippets=snippets,
             )
 
         except (IpBlocked, RequestBlocked):
+            logger.warning("YouTube timedtext rate-limited IP (IpBlocked) for video: %s", video_id)
             return VideoTranscript(
                 video_id=video_id,
                 available=False,
-                error="YouTube temporarily rate-limited IP for caption requests (IpBlocked).",
+                error_reason="YouTube temporarily rate-limited IP for caption requests (IpBlocked).",
             )
 
         except TranscriptsDisabled:
             return VideoTranscript(
                 video_id=video_id,
                 available=False,
-                error="Transcripts are disabled by the creator for this video.",
+                error_reason="Transcripts are disabled by the creator for this video.",
             )
 
         except VideoUnavailable:
             return VideoTranscript(
                 video_id=video_id,
                 available=False,
-                error="Video is private, restricted, or unavailable.",
+                error_reason="Video is private, restricted, or unavailable.",
             )
 
         except (NoTranscriptFound, CouldNotRetrieveTranscript):
@@ -155,22 +177,24 @@ class TranscriptService:
                 try:
                     found = transcript_list.find_transcript(list(languages))
                 except Exception:
-                    # Otherwise pick first available transcript
+                    # Otherwise take first available transcript
                     for t in transcript_list:
                         found = t
                         break
 
                 if found:
                     fetched = found.fetch()
-                    text = self._clean_transcript_text(fetched.snippets)
+                    clean_text, snippets = self.cleaner.clean(fetched.snippets)
                     return VideoTranscript(
                         video_id=video_id,
                         available=True,
-                        text=text,
-                        word_count=len(text.split()),
+                        text=clean_text,
                         language=fetched.language,
                         language_code=fetched.language_code,
                         is_generated=fetched.is_generated,
+                        word_count=len(clean_text.split()),
+                        character_count=len(clean_text),
+                        snippets=snippets,
                     )
             except Exception as e:
                 logger.debug("Fallback transcript search failed for %s: %s", video_id, e)
@@ -178,14 +202,14 @@ class TranscriptService:
             return VideoTranscript(
                 video_id=video_id,
                 available=False,
-                error="No transcript found for this video.",
+                error_reason="No transcript found for this video.",
             )
 
         except YouTubeTranscriptApiException as e:
             return VideoTranscript(
                 video_id=video_id,
                 available=False,
-                error=f"YouTube transcript error: {str(e)}",
+                error_reason=f"YouTube transcript error: {str(e)}",
             )
 
         except Exception as e:
@@ -193,7 +217,7 @@ class TranscriptService:
             return VideoTranscript(
                 video_id=video_id,
                 available=False,
-                error=f"Unexpected error: {str(e)}",
+                error_reason=f"Unexpected error: {str(e)}",
             )
 
     def get_text_only(
@@ -201,72 +225,61 @@ class TranscriptService:
         video_input: str,
         languages: Tuple[str, ...] = ("en", "en-US", "en-GB"),
     ) -> str:
-        """Convenience method that returns just the plain text string of the transcript.
-
-        Returns empty string if unavailable.
-        """
+        """Convenience method returning raw string content or empty string."""
         result = self.get_transcript(video_input, languages=languages)
         return result.text if result.available else ""
 
-    @staticmethod
-    def _clean_transcript_text(snippets: List[Any]) -> str:
-        """Join snippet pieces and normalize whitespace into clean sentences."""
-        raw_pieces = [s.text.strip() for s in snippets if s.text and s.text.strip()]
-        # Join into single readable text
-        combined = " ".join(raw_pieces)
-        # Normalize double spaces or newline artifacts
-        clean = re.sub(r"\s+", " ", combined).strip()
-        return clean
+    def enrich_video(self, video: YouTubeVideo) -> YouTubeVideo:
+        """OOP method to attach a fetched transcript to an existing YouTubeVideo model."""
+        video.transcript = self.get_transcript(video.video_id)
+        return video
 
 
 def main() -> None:
-    """CLI to convert any YouTube video to text."""
+    """CLI to inspect and convert any YouTube video to text."""
     parser = argparse.ArgumentParser(
-        description="Convert YouTube Video Knowledge into Text using Transcripts"
+        description="Convert YouTube Video Knowledge into Text using Transcripts (OOP & Pydantic)"
     )
     parser.add_argument(
         "video",
         type=str,
-        help="YouTube Video ID or Full URL (e.g. 'CWdTBLsbaQs' or 'https://www.youtube.com/watch?v=CWdTBLsbaQs')",
+        help="YouTube Video ID or Full URL (e.g. 'DHzC4VVmolk' or 'https://www.youtube.com/watch?v=...')",
     )
     parser.add_argument(
         "--preview",
         type=int,
         default=500,
-        help="Number of characters to preview in terminal (0 for full text, default 500)",
+        help="Number of characters to preview in terminal (default: 500)",
     )
 
     args = parser.parse_args()
 
     service = TranscriptService()
     print("=" * 70)
-    print("YOUTUBE TRANSCRIPT SERVICE")
+    print("YOUTUBE TRANSCRIPT SERVICE (OOP & PYDANTIC)")
     print("=" * 70)
 
-    try:
-        vid = service.extract_video_id(args.video)
-        print(f"Target Video ID: {vid}")
-        print("Extracting transcript knowledge...")
-        result = service.get_transcript(vid)
+    result = service.get_transcript(args.video)
 
-        if result.available:
-            print("\n[SUCCESS] Transcript Extracted:")
-            print(f"  • Words:        {result.word_count:,}")
-            print(f"  • Language:     {result.language} ({result.language_code})")
-            print(f"  • Auto-Generated: {result.is_generated}")
-            print("-" * 70)
+    if result.available:
+        print(f"[SUCCESS] Transcript Extracted:")
+        print(f"  • Video ID:        {result.video_id}")
+        print(f"  • Words:           {result.word_count:,}")
+        print(f"  • Characters:      {result.character_count:,}")
+        print(f"  • Language:        {result.language} ({result.language_code})")
+        print(f"  • Auto-Generated:  {result.is_generated}")
+        print(f"  • Total Snippets:  {len(result.snippets)}")
+        print("-" * 70)
 
-            if args.preview > 0:
-                print(f"Preview (first {args.preview} chars):\n")
-                print(result.text[: args.preview] + "...")
-            else:
-                print("Full Transcript:\n")
-                print(result.text)
+        if args.preview > 0:
+            print(f"Preview (first {args.preview} chars):\n")
+            print(result.text[: args.preview] + "...")
         else:
-            print(f"\n[UNAVAILABLE] {result.error}")
-
-    except Exception as e:
-        print(f"\n[ERROR] {e}")
+            print("Full Transcript:\n")
+            print(result.text)
+    else:
+        print(f"[UNAVAILABLE] Video ID: {result.video_id}")
+        print(f"Reason: {result.error_reason}")
 
     print("=" * 70)
 
