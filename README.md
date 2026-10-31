@@ -1,0 +1,7 @@
+i want to build a ai news aggregator where i can take info from multiple sources like youtube channels and blog posts from open ai and anthropic and tto scrape them and put then into dataBase where we have some kind of structure in which we have sources and then take all these articles and do LLM summary around it and baseed on the user insights we generate a daily digest which are short snippets with a link to orignal source now from youtube channels i want to create a list of chnnels and then get the latest videos from that channels i think we cna use youtube rss feed for that, for the blog posts we can have the url i want the backend to be in python and the data base should be postgreSql and to define db model and create table i would like to  use SQLAlchemeyand i want to create an app folder where all the app logic is in and also a docker folder where we first creaate a minimal setup for postre SQL db and then later i want to make sure that i can easily deploy wole app to render and then also schedule it in every 24 hrs to run reports and get everything , after creating the daily digest just send an email to the register mail id  
+
+
+https://openai.com/news/research/
+https://openai.com/news/engineering/
+https://www.anthropic.com/news
+https://www.anthropic.com/engineering
