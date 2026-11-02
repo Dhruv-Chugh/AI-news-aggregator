@@ -17,6 +17,11 @@ if TYPE_CHECKING:
         get_daily_openai_articles,
         get_daily_openai_focus,
     )
+    from app.scrapers.runner import (
+        AggregationResult,
+        AggregationRunner,
+        run_news_aggregation,
+    )
     from app.scrapers.youtube import YouTubeService, YouTubeVideo
 
 __all__ = [
@@ -32,6 +37,9 @@ __all__ = [
     "AnthropicArticleFilter",
     "get_daily_anthropic_articles",
     "get_daily_anthropic_focus",
+    "AggregationRunner",
+    "AggregationResult",
+    "run_news_aggregation",
 ]
 
 
@@ -58,4 +66,11 @@ def __getattr__(name: str):
     ):
         import app.scrapers.anthropic as ant
         return getattr(ant, name)
+    if name in (
+        "AggregationRunner",
+        "AggregationResult",
+        "run_news_aggregation",
+    ):
+        import app.scrapers.runner as run
+        return getattr(run, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

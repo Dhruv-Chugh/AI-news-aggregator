@@ -1,0 +1,33 @@
+{
+  "youtube_channels": [
+    {
+      "name": "Think School",
+      "channel_id": "UCKZozRVHRYsYHGEyNKuhhdA",
+      "handle": "@thinkschool",
+      "url": "https://www.youtube.com/@thinkschool",
+      "is_active": true
+    },
+    {
+      "name": "Figuring Out by Raj Shamani",
+      "channel_id": "UCzwCEE_PchiBULMnAJqhGVg",
+      "handle": "@rajshamani",
+      "url": "https://www.youtube.com/@rajshamani",
+      "is_active": true
+    }
+  ],
+  "openai": {
+    "name": "OpenAI News & Research",
+    "rss_url": "https://openai.com/news/rss.xml",
+    "is_active": true
+  },
+  "anthropic": {
+    "name": "Anthropic News, Engineering & Research",
+    "feeds": {
+      "news": "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_anthropic_news.xml",
+      "engineering": "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_anthropic_engineering.xml",
+      "research": "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_anthropic_research.xml"
+    },
+    "is_active": true
+  }
+}
+
