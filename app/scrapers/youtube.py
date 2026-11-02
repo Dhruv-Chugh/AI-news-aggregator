@@ -358,6 +358,20 @@ class YouTubeService:
         video.transcript = self.transcript_service.get_transcript(video.video_id)
         return video
 
+    def export_to_markdown(
+        self,
+        videos: List[YouTubeVideo],
+        filepath: Optional[str] = None,
+        title: str = "YouTube Video Digest",
+    ) -> str:
+        """Export a list of YouTube videos to formatted markdown, optionally saving to file."""
+        from app.services.markdown_exporter import MarkdownExporter
+        exporter = MarkdownExporter()
+        md_text = exporter.export_youtube_videos(videos, title=title)
+        if filepath:
+            exporter.save_to_file(md_text, filepath)
+        return md_text
+
 
 # ---------------------------------------------------------------------------
 # Simple Top-Level Helper Functions
@@ -381,6 +395,13 @@ def get_daily_ai_videos(
 
 def main() -> None:
     """CLI to inspect channels and latest videos using OOP & Pydantic."""
+    import sys
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
     parser = argparse.ArgumentParser(description="YouTube AI News Ingestion (OOP & Pydantic)")
     parser.add_argument(
         "--channel",
@@ -405,6 +426,18 @@ def main() -> None:
         action="store_true",
         help="Fetch spoken transcripts for matching videos",
     )
+    parser.add_argument(
+        "--export-md",
+        type=str,
+        default=None,
+        help="Export matching videos to a Markdown (.md) file at specified path",
+    )
+    parser.add_argument(
+        "--markdown",
+        "-m",
+        action="store_true",
+        help="Print matching videos in Markdown format directly to stdout",
+    )
 
     args = parser.parse_args()
 
@@ -425,32 +458,43 @@ def main() -> None:
             include_shorts=not args.no_shorts,
         )
 
-        print(f"Filter Criteria: {criteria.model_dump_json(indent=2)}\n")
         videos = service.get_recent_videos(criteria=criteria, fetch_transcripts=args.transcripts)
 
-        print(f"Found {len(videos)} matching video(s):")
-        print("=" * 70)
+        if args.markdown:
+            from app.services.markdown_exporter import MarkdownExporter
+            exporter = MarkdownExporter()
+            print(exporter.export_youtube_videos(videos))
+        else:
+            print(f"Found {len(videos)} matching video(s):")
+            print("=" * 70)
 
-        for idx, v in enumerate(videos, 1):
-            pub_str = v.published_at.strftime("%Y-%m-%d %H:%M:%S UTC")
-            video_type = "[SHORT]" if v.is_short else "[VIDEO]"
-            print(f"\n[{idx}] {video_type} {v.title}")
-            print(f"    Channel:   {v.channel_name} ({v.channel_id})")
-            print(f"    Published: {pub_str}")
-            print(f"    URL:       {v.url}")
+            for idx, v in enumerate(videos, 1):
+                pub_str = v.published_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+                video_type = "[SHORT]" if v.is_short else "[VIDEO]"
+                print(f"\n[{idx}] {video_type} {v.title}")
+                print(f"    Channel:   {v.channel_name} ({v.channel_id})")
+                print(f"    Published: {pub_str}")
+                print(f"    URL:       {v.url}")
 
-            if v.transcript:
-                if v.transcript.available:
-                    print(
-                        f"    Transcript: Available ({v.transcript.word_count:,} words, "
-                        f"language: {v.transcript.language})"
-                    )
-                    preview = v.transcript.text[:250].strip()
-                    print(f"    Preview:    \"{preview}...\"")
-                else:
-                    print(f"    Transcript: Unavailable ({v.transcript.error_reason})")
+                if v.transcript:
+                    if v.transcript.available:
+                        print(
+                            f"    Transcript: Available ({v.transcript.word_count:,} words, "
+                            f"language: {v.transcript.language})"
+                        )
+                        preview = v.transcript.text[:250].strip()
+                        print(f"    Preview:    \"{preview}...\"")
+                    else:
+                        print(f"    Transcript: Unavailable ({v.transcript.error_reason})")
 
-    print("\n" + "=" * 70)
+            print("\n" + "=" * 70)
+
+        if args.export_md:
+            from app.services.markdown_exporter import MarkdownExporter
+            exporter = MarkdownExporter()
+            md_output = exporter.export_youtube_videos(videos)
+            saved_path = exporter.save_to_file(md_output, args.export_md)
+            print(f"[EXPORT SUCCESS] Markdown saved to: {saved_path}")
 
 
 if __name__ == "__main__":

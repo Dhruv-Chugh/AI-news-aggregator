@@ -96,6 +96,33 @@ class YouTubeVideo(BaseModel):
         """Check if video has an available transcript."""
         return self.transcript is not None and self.transcript.available
 
+    def to_markdown(self) -> str:
+        """Export video details and transcript as formatted GitHub-Flavored Markdown."""
+        pub_str = self.published_at.strftime("%Y-%m-%d %H:%M UTC")
+        vtype = "Short" if self.is_short else "Full Video"
+        lines = [
+            f"### [{self.title}]({self.url})",
+            f"- **Channel:** {self.channel_name} (`{self.channel_id}`)",
+            f"- **Published:** {pub_str}",
+            f"- **Format:** `{vtype}`",
+            f"- **Watch Link:** [{self.url}]({self.url})",
+            "",
+        ]
+        if self.description:
+            desc_preview = self.description[:400].strip()
+            lines.extend([
+                "#### Description",
+                f"> {desc_preview}...",
+                "",
+            ])
+        if self.transcript and self.transcript.available:
+            lines.extend([
+                f"#### Transcript Knowledge ({self.transcript.word_count:,} words, {self.transcript.language})",
+                f"> {self.transcript.text[:600].strip()}...",
+                "",
+            ])
+        return "\n".join(lines).strip()
+
 
 class FilterCriteria(BaseModel):
     """Pydantic model for filtering YouTube videos by time and attributes."""
@@ -113,4 +140,3 @@ class FilterCriteria(BaseModel):
         if self.hours_back is not None and self.hours_back > 0:
             return datetime.now(timezone.utc) - timedelta(hours=self.hours_back)
         return None
-

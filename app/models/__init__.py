@@ -1,5 +1,15 @@
 """Pydantic data schemas for AI News Aggregator."""
 
+from app.models.anthropic import (
+    AnthropicArticle,
+    AnthropicCategory,
+    AnthropicFilterCriteria,
+)
+from app.models.openai import (
+    OpenAIArticle,
+    OpenAICategory,
+    OpenAIFilterCriteria,
+)
 from app.models.youtube import (
     ChannelConfig,
     FilterCriteria,
@@ -14,5 +24,10 @@ __all__ = [
     "TranscriptSnippet",
     "VideoTranscript",
     "YouTubeVideo",
+    "OpenAIArticle",
+    "OpenAICategory",
+    "OpenAIFilterCriteria",
+    "AnthropicArticle",
+    "AnthropicCategory",
+    "AnthropicFilterCriteria",
 ]
-
