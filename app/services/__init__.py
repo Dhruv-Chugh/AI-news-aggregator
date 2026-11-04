@@ -4,7 +4,6 @@ from app.services.content_extractor import (
     ArticleContentExtractor,
     ExtractedContent,
 )
-from app.services.markdown_exporter import MarkdownExporter
 from app.services.transcript_service import (
     TranscriptCleaner,
     TranscriptIdParser,
@@ -12,7 +11,6 @@ from app.services.transcript_service import (
 )
 
 __all__ = [
-    "MarkdownExporter",
     "TranscriptService",
     "TranscriptIdParser",
     "TranscriptCleaner",

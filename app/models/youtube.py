@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
-import re
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ChannelConfig(BaseModel):
@@ -77,6 +77,7 @@ class YouTubeVideo(BaseModel):
     description: str = Field(default="", description="Video description text from RSS/webpage")
     thumbnail_url: Optional[str] = Field(default=None, description="Video thumbnail image URL")
     transcript: Optional[VideoTranscript] = Field(default=None, description="Associated transcript knowledge")
+    is_short: bool = Field(default=False, description="Whether this video is a YouTube Short")
 
     @field_validator("published_at", mode="before")
     @classmethod
@@ -86,10 +87,17 @@ class YouTubeVideo(BaseModel):
             return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
         return v
 
-    @property
-    def is_short(self) -> bool:
-        """Determine if video is a YouTube Short based on URL."""
-        return "/shorts/" in self.url
+    @model_validator(mode="after")
+    def detect_short_heuristics(self) -> YouTubeVideo:
+        """Infer is_short from URL and title/description hashtags."""
+        if not self.is_short:
+            if "/shorts/" in self.url:
+                self.is_short = True
+            elif self.title and ("#shorts" in self.title.lower() or "#short" in self.title.lower()):
+                self.is_short = True
+            elif self.description and ("#shorts" in self.description.lower() or "#short" in self.description.lower()):
+                self.is_short = True
+        return self
 
     @property
     def has_transcript(self) -> bool:
@@ -130,7 +138,7 @@ class FilterCriteria(BaseModel):
     hours_back: Optional[int] = Field(default=24, description="Lookback window in hours (default 24h)")
     since: Optional[datetime] = Field(default=None, description="Explicit cutoff timestamp in UTC")
     max_results_per_channel: Optional[int] = Field(default=None, description="Max videos to retain per channel")
-    include_shorts: bool = Field(default=True, description="Whether to include YouTube Shorts")
+    include_shorts: bool = Field(default=False, description="Whether to include YouTube Shorts (default False to skip Shorts)")
 
     @property
     def cutoff_datetime(self) -> Optional[datetime]:
