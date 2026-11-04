@@ -297,20 +297,6 @@ class OpenAIScraperService:
         )
         return self.get_recent_articles(criteria=criteria, fetch_full_content=fetch_full_content)
 
-    def export_to_markdown(
-        self,
-        articles: List[OpenAIArticle],
-        filepath: Optional[str] = None,
-        title: str = "OpenAI News & Research Digest",
-    ) -> str:
-        """Export a list of OpenAI articles to formatted markdown, optionally saving to file."""
-        from app.services.markdown_exporter import MarkdownExporter
-        exporter = MarkdownExporter()
-        md_text = exporter.export_openai_articles(articles, title=title)
-        if filepath:
-            exporter.save_to_file(md_text, filepath)
-        return md_text
-
 
 # ---------------------------------------------------------------------------
 # Simple Top-Level Helper Functions
@@ -381,12 +367,6 @@ def main() -> None:
         help="Fetch full article content directly from original openai.com website",
     )
     parser.add_argument(
-        "--export-md",
-        type=str,
-        default=None,
-        help="Export matching articles to a Markdown (.md) file at specified path",
-    )
-    parser.add_argument(
         "--markdown",
         "-m",
         action="store_true",
@@ -422,10 +402,9 @@ def main() -> None:
         articles = service.get_recent_articles(criteria=criteria, fetch_full_content=args.fetch_content)
 
         if args.markdown:
-            from app.services.markdown_exporter import MarkdownExporter
-            exporter = MarkdownExporter()
-            md_output = exporter.export_openai_articles(articles)
-            print(md_output)
+            for art in articles:
+                print(art.to_markdown())
+                print("\n---\n")
         else:
             print(f"\nFound {len(articles)} matching OpenAI article(s):")
             print("=" * 75)
@@ -444,13 +423,6 @@ def main() -> None:
                     print(f"    Summary:   \"{art.summary[:200]}...\"")
 
             print("\n" + "=" * 75)
-
-        if args.export_md:
-            from app.services.markdown_exporter import MarkdownExporter
-            exporter = MarkdownExporter()
-            md_output = exporter.export_openai_articles(articles)
-            saved_path = exporter.save_to_file(md_output, args.export_md)
-            print(f"[EXPORT SUCCESS] Markdown saved to: {saved_path}")
 
 
 if __name__ == "__main__":

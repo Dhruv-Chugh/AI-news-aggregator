@@ -289,3 +289,61 @@ def test_service_enrich_video_transcript(youtube_service):
         enriched = youtube_service.enrich_video_with_transcript(video)
         assert enriched.has_transcript is True
         assert enriched.transcript.text == "This is test knowledge text."
+
+
+def test_youtube_shorts_detection_heuristics():
+    """YouTubeVideo auto-detects shorts from #shorts hashtag in title or description."""
+    now = datetime.now(timezone.utc)
+
+    # 1. Title hashtag
+    v1 = YouTubeVideo(
+        video_id="short_hash_1",
+        title="Quick AI Tip #shorts",
+        url="https://www.youtube.com/watch?v=short_hash_1",
+        channel_id="UCKZozRVHRYsYHGEyNKuhhdA",
+        channel_name="Think School",
+        published_at=now,
+    )
+    assert v1.is_short is True
+
+    # 2. Description hashtag
+    v2 = YouTubeVideo(
+        video_id="short_hash_2",
+        title="Quick AI Tip",
+        url="https://www.youtube.com/watch?v=short_hash_2",
+        channel_id="UCKZozRVHRYsYHGEyNKuhhdA",
+        channel_name="Think School",
+        published_at=now,
+        description="Don't forget to like! #Shorts",
+    )
+    assert v2.is_short is True
+
+    # 3. Regular video
+    v3 = YouTubeVideo(
+        video_id="long_regular_3",
+        title="Full In-Depth Analysis of Semiconductor Industry",
+        url="https://www.youtube.com/watch?v=long_regular_3",
+        channel_id="UCKZozRVHRYsYHGEyNKuhhdA",
+        channel_name="Think School",
+        published_at=now,
+        description="A 45-minute breakdown of chips.",
+    )
+    assert v3.is_short is False
+
+
+def test_feed_parser_probe_shorts(youtube_service):
+    """FeedParserClient probes /shorts/ endpoint and accurately identifies Shorts."""
+    client = youtube_service.feed_parser
+
+    # Mock HEAD response for short: status 200
+    mock_resp_short = MagicMock(status_code=200)
+    with patch.object(client.client, "head", return_value=mock_resp_short):
+        is_short = client.is_short_video("short_probe_id")
+        assert is_short is True
+
+    # Clear cache and mock HEAD response for normal video: status 303 redirect
+    client._shorts_cache.clear()
+    mock_resp_long = MagicMock(status_code=303)
+    with patch.object(client.client, "head", return_value=mock_resp_long):
+        is_long = client.is_short_video("long_probe_id")
+        assert is_long is False

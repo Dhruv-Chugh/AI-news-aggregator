@@ -2,6 +2,7 @@
 
 Object-oriented service to discover and filter YouTube videos via native RSS feeds.
 Employs Pydantic schemas for strict validation and explicit type checking.
+Includes automated YouTube Shorts detection to exclude short-form content.
 """
 
 from __future__ import annotations
@@ -110,8 +111,53 @@ class ChannelResolver:
 class FeedParserClient:
     """Class responsible for fetching raw YouTube RSS XML and parsing into Pydantic models."""
 
-    def __init__(self, client: httpx.Client) -> None:
+    def __init__(self, client: httpx.Client, check_shorts: bool = True) -> None:
         self.client = client
+        self.check_shorts = check_shorts
+        self._shorts_cache: Dict[str, bool] = {}
+
+    def is_short_video(
+        self,
+        video_id: str,
+        title: str = "",
+        description: str = "",
+        url: str = "",
+    ) -> bool:
+        """Accurately determine whether a video is a YouTube Short."""
+        if video_id in self._shorts_cache:
+            return self._shorts_cache[video_id]
+
+        # 1. Fast heuristics: explicit /shorts/ URL or hashtags
+        if "/shorts/" in url:
+            self._shorts_cache[video_id] = True
+            return True
+
+        lower_t = title.lower() if title else ""
+        lower_d = description.lower() if description else ""
+        if "#shorts" in lower_t or "#short" in lower_t or "#shorts" in lower_d or "#short" in lower_d:
+            self._shorts_cache[video_id] = True
+            return True
+
+        # 2. Live HTTP HEAD redirect probe on https://www.youtube.com/shorts/{video_id}
+        if self.check_shorts:
+            try:
+                head_resp = self.client.head(
+                    f"https://www.youtube.com/shorts/{video_id}",
+                    follow_redirects=False,
+                )
+                # YouTube Shorts return HTTP 200 without redirecting to /watch?v=
+                if head_resp.status_code == 200:
+                    self._shorts_cache[video_id] = True
+                    return True
+                # Regular videos return HTTP 303/302 redirecting to /watch?v=
+                if head_resp.status_code in (301, 302, 303, 307, 308):
+                    self._shorts_cache[video_id] = False
+                    return False
+            except Exception as e:
+                logger.debug("Shorts head probe failed for %s: %s", video_id, e)
+
+        self._shorts_cache[video_id] = False
+        return False
 
     def fetch_feed(self, channel: ChannelConfig) -> List[YouTubeVideo]:
         """Fetch RSS feed for a channel and return a list of validated YouTubeVideo models."""
@@ -154,6 +200,10 @@ class FeedParserClient:
                 title = entry.get("title", "Untitled Video").strip()
                 link = entry.get("link", f"https://www.youtube.com/watch?v={vid}")
 
+                # Detect whether this item is a YouTube Short
+                is_short = self.is_short_video(vid, title=title, description=entry.get("summary", ""), url=link)
+                final_url = f"https://www.youtube.com/shorts/{vid}" if is_short else link
+
                 # Publication Timestamp
                 pub_raw = entry.get("published") or entry.get("updated")
                 if pub_raw:
@@ -176,12 +226,13 @@ class FeedParserClient:
                 video_model = YouTubeVideo(
                     video_id=vid,
                     title=title,
-                    url=link,
+                    url=final_url,
                     channel_id=channel.channel_id,
                     channel_name=detected_channel_title,
                     published_at=pub_dt,
                     description=description,
                     thumbnail_url=thumb,
+                    is_short=is_short,
                 )
                 videos.append(video_model)
 
@@ -200,7 +251,7 @@ class VideoFilter:
         """Apply time, short, and quantity filters to videos."""
         filtered = videos
 
-        # 1. Filter out shorts if requested
+        # 1. Filter out shorts if requested (defaults to False / exclude shorts)
         if not criteria.include_shorts:
             filtered = [v for v in filtered if not v.is_short]
 
@@ -224,6 +275,7 @@ class YouTubeService:
         channels: Optional[List[Union[ChannelConfig, Dict[str, Any], str]]] = None,
         timeout: float = 15.0,
         proxy_url: Optional[str] = None,
+        check_shorts: bool = True,
     ) -> None:
         """Initialize the YouTubeService.
 
@@ -231,6 +283,7 @@ class YouTubeService:
             channels: Optional list of ChannelConfig models, dicts, or channel strings.
             timeout: HTTP request timeout in seconds.
             proxy_url: Optional proxy URL for network calls.
+            check_shorts: Whether to probe YouTube /shorts/ endpoint for accurate Shorts detection.
         """
         self.timeout = timeout
         self.client = httpx.Client(
@@ -245,7 +298,7 @@ class YouTubeService:
             },
         )
         self.resolver = ChannelResolver(self.client)
-        self.feed_parser = FeedParserClient(self.client)
+        self.feed_parser = FeedParserClient(self.client, check_shorts=check_shorts)
         self.filter = VideoFilter()
         self.transcript_service = TranscriptService(proxy_url=proxy_url)
 
@@ -326,7 +379,7 @@ class YouTubeService:
         hours_back: Optional[int] = 24,
     ) -> List[YouTubeVideo]:
         """Convenience method to filter videos by hours back."""
-        criteria = FilterCriteria(hours_back=hours_back)
+        criteria = FilterCriteria(hours_back=hours_back, include_shorts=False)
         return self.filter.apply(videos, criteria)
 
     def get_recent_videos(
@@ -334,9 +387,10 @@ class YouTubeService:
         criteria: Optional[FilterCriteria] = None,
         hours_back: Optional[int] = 24,
         fetch_transcripts: bool = False,
+        include_shorts: bool = False,
     ) -> List[YouTubeVideo]:
-        """Retrieve recent videos across all tracked channels applying criteria."""
-        filter_criteria = criteria or FilterCriteria(hours_back=hours_back)
+        """Retrieve recent videos across all tracked channels applying criteria (Shorts excluded by default)."""
+        filter_criteria = criteria or FilterCriteria(hours_back=hours_back, include_shorts=include_shorts)
         all_videos: List[YouTubeVideo] = []
 
         for ch in self._channels:
@@ -358,20 +412,6 @@ class YouTubeService:
         video.transcript = self.transcript_service.get_transcript(video.video_id)
         return video
 
-    def export_to_markdown(
-        self,
-        videos: List[YouTubeVideo],
-        filepath: Optional[str] = None,
-        title: str = "YouTube Video Digest",
-    ) -> str:
-        """Export a list of YouTube videos to formatted markdown, optionally saving to file."""
-        from app.services.markdown_exporter import MarkdownExporter
-        exporter = MarkdownExporter()
-        md_text = exporter.export_youtube_videos(videos, title=title)
-        if filepath:
-            exporter.save_to_file(md_text, filepath)
-        return md_text
-
 
 # ---------------------------------------------------------------------------
 # Simple Top-Level Helper Functions
@@ -385,9 +425,9 @@ def get_channel_latest(channel_id_or_handle: str) -> Optional[YouTubeVideo]:
 def get_daily_ai_videos(
     hours_back: int = 24,
     fetch_transcripts: bool = False,
-    include_shorts: bool = True,
+    include_shorts: bool = False,
 ) -> List[YouTubeVideo]:
-    """Get all videos published across all configured channels in the last 24 hours."""
+    """Get all videos published across all configured channels in the last 24 hours (excluding Shorts by default)."""
     with YouTubeService() as service:
         criteria = FilterCriteria(hours_back=hours_back, include_shorts=include_shorts)
         return service.get_recent_videos(criteria=criteria, fetch_transcripts=fetch_transcripts)
@@ -417,20 +457,14 @@ def main() -> None:
         help="Hours lookback (default: 24). Set 0 for all latest entries.",
     )
     parser.add_argument(
-        "--no-shorts",
+        "--include-shorts",
         action="store_true",
-        help="Exclude YouTube Shorts from results",
+        help="Include YouTube Shorts in results (default: excluded)",
     )
     parser.add_argument(
         "--transcripts",
         action="store_true",
         help="Fetch spoken transcripts for matching videos",
-    )
-    parser.add_argument(
-        "--export-md",
-        type=str,
-        default=None,
-        help="Export matching videos to a Markdown (.md) file at specified path",
     )
     parser.add_argument(
         "--markdown",
@@ -455,15 +489,15 @@ def main() -> None:
 
         criteria = FilterCriteria(
             hours_back=args.hours if args.hours > 0 else None,
-            include_shorts=not args.no_shorts,
+            include_shorts=args.include_shorts,
         )
 
         videos = service.get_recent_videos(criteria=criteria, fetch_transcripts=args.transcripts)
 
         if args.markdown:
-            from app.services.markdown_exporter import MarkdownExporter
-            exporter = MarkdownExporter()
-            print(exporter.export_youtube_videos(videos))
+            for v in videos:
+                print(v.to_markdown())
+                print("\n---\n")
         else:
             print(f"Found {len(videos)} matching video(s):")
             print("=" * 70)
@@ -488,13 +522,6 @@ def main() -> None:
                         print(f"    Transcript: Unavailable ({v.transcript.error_reason})")
 
             print("\n" + "=" * 70)
-
-        if args.export_md:
-            from app.services.markdown_exporter import MarkdownExporter
-            exporter = MarkdownExporter()
-            md_output = exporter.export_youtube_videos(videos)
-            saved_path = exporter.save_to_file(md_output, args.export_md)
-            print(f"[EXPORT SUCCESS] Markdown saved to: {saved_path}")
 
 
 if __name__ == "__main__":
