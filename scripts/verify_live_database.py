@@ -16,7 +16,11 @@ from __future__ import annotations
 
 import sys
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict
+
+# Ensure repository root is on sys.path for direct execution
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import func, inspect, select, text
 
