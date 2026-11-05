@@ -375,6 +375,11 @@ def main() -> None:
         action="store_true",
         help="Scan and delete all YouTube Shorts from the database",
     )
+    parser.add_argument(
+        "--llm-markdown",
+        action="store_true",
+        help="Export database entries formatted as clean Markdown for LLMs",
+    )
     parser.add_argument("--no-db", action="store_true", help="Skip saving scraped items to database")
     parser.add_argument("--no-yt", action="store_true", help="Skip YouTube")
     parser.add_argument("--no-openai", action="store_true", help="Skip OpenAI")
@@ -385,6 +390,17 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = get_sources_config()
+
+    # 0. Output LLM Markdown on demand
+    if args.llm_markdown:
+        if not check_connection():
+            print("❌ Database is not reachable. (Run 'docker compose up -d' first)\n")
+            return
+        from app.services.llm_formatter import get_database_llm_markdown
+
+        hours_val = None if args.all else (args.hours if args.hours > 0 else None)
+        print(get_database_llm_markdown(hours=hours_val))
+        return
 
     # 1. Clean shorts on demand
     if args.clean_shorts:

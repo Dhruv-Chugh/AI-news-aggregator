@@ -141,6 +141,54 @@ class Article(Base):
             "created_at": self.created_at.isoformat(),
         }
 
+    def to_llm_markdown(self, index: Optional[int] = None) -> str:
+        """Format article metadata and full content into simple, clean Markdown for LLMs."""
+        source_name = self.source.name if self.source else (self.category or "Unknown Source")
+        source_type = self.source.source_type if self.source else "article"
+        prefix = f"{index}. " if index is not None else ""
+        pub_str = (
+            self.published_at.strftime("%Y-%m-%d %H:%M UTC")
+            if self.published_at
+            else "Unknown Date"
+        )
+        type_label = "Spoken Transcript" if self.content_type == "transcript" else "Full Web Article"
+        word_count_str = f"{self.word_count:,} words" if self.word_count else "Not counted"
+
+        lines = [
+            f"## {prefix}[{source_name}] {self.title}",
+            f"- **Source**: {source_name} (`{source_type}`)",
+            f"- **Original URL**: {self.url}",
+            f"- **Published**: {pub_str}",
+            f"- **Author / Channel**: {self.author or 'Unknown'}",
+            f"- **Category / Focus**: {self.category or 'General'}",
+            f"- **Content Type**: {type_label}",
+            f"- **Word Count**: {word_count_str}",
+            f"- **External ID**: `{self.external_id}`",
+        ]
+
+        meta = self.metadata_json or {}
+        if meta.get("transcript_language"):
+            lines.append(f"- **Language**: {meta['transcript_language']}")
+        if meta.get("categories") and isinstance(meta["categories"], list):
+            cats_joined = ", ".join(f"`{c}`" for c in meta["categories"] if c)
+            if cats_joined:
+                lines.append(f"- **Tags**: {cats_joined}")
+
+        lines.append("")
+
+        if self.raw_content and self.raw_content.strip():
+            header = "### Spoken Transcript:" if self.content_type == "transcript" else "### Full Content:"
+            lines.append(header)
+            lines.append(self.raw_content.strip())
+        elif self.summary and self.summary.strip():
+            lines.append("### Summary (Full Content Unavailable):")
+            lines.append(f"> {self.summary.strip()}")
+        else:
+            lines.append("### Content:")
+            lines.append("_No content or summary available._")
+
+        return "\n".join(lines)
+
     def __repr__(self) -> str:
         safe_title = self.title[:30] if self.title else "Untitled"
         return f"<Article(id={self.id}, external_id='{self.external_id}', title='{safe_title}...')>"

@@ -268,6 +268,30 @@ class ArticleRepository(BaseRepository):
         stmt = stmt.order_by(desc(Article.published_at)).limit(limit)
         return list(self.session.execute(stmt).scalars().all())
 
+    def get_all(self, limit: int = 100) -> List[Article]:
+        """Retrieve all articles ordered by published_at desc."""
+        stmt = select(Article).order_by(desc(Article.published_at)).limit(limit)
+        return list(self.session.execute(stmt).scalars().all())
+
+    def export_llm_markdown(
+        self,
+        hours: Optional[int] = None,
+        source_type: Optional[str] = None,
+        unsummarized_only: bool = False,
+        limit: int = 100,
+        grouped: bool = False,
+    ) -> str:
+        """Format matching database articles into clean Markdown for LLMs."""
+        from app.services.llm_formatter import LLMMarkdownFormatter
+
+        if unsummarized_only:
+            articles = self.get_unsummarized(hours=hours, limit=limit)
+        else:
+            articles = self.get_recent(hours=hours, source_type=source_type, limit=limit)
+
+        formatter = LLMMarkdownFormatter()
+        return formatter.format_source_grouped(articles) if grouped else formatter.format_articles(articles)
+
     def get_by_source_id(self, source_id: int, limit: int = 50) -> List[Article]:
         """Retrieve articles published by a specific source."""
         stmt = (
@@ -664,5 +688,22 @@ class NewsRepository:
                 "categories": cats,
                 "feed_source": getattr(article, "feed_source", None),
             },
+        )
+
+    def export_llm_markdown(
+        self,
+        hours: Optional[int] = None,
+        source_type: Optional[str] = None,
+        unsummarized_only: bool = False,
+        limit: int = 100,
+        grouped: bool = False,
+    ) -> str:
+        """Format matching database articles into clean Markdown for LLMs."""
+        return self.articles.export_llm_markdown(
+            hours=hours,
+            source_type=source_type,
+            unsummarized_only=unsummarized_only,
+            limit=limit,
+            grouped=grouped,
         )
 
