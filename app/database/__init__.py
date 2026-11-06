@@ -4,13 +4,26 @@ Exposes SQLAlchemy models, session management, and CRUD repositories.
 """
 
 from app.database.init_db import create_tables, init_db, seed_initial_data
-from app.database.models import Article, Base, Digest, Source, Subscriber, utc_now
+from app.database.models import (
+    Article,
+    ArticleDigest,
+    Base,
+    DailyDigest,
+    Digest,
+    DigestEntry,
+    Source,
+    Subscriber,
+    UserDigestRanking,
+    utc_now,
+)
 from app.database.repository import (
+    ArticleDigestRepository,
     ArticleRepository,
     DigestRepository,
     NewsRepository,
     SourceRepository,
     SubscriberRepository,
+    UserDigestRankingRepository,
 )
 from app.database.session import (
     SessionLocal,
@@ -28,7 +41,11 @@ __all__ = [
     "Source",
     "Article",
     "Digest",
+    "ArticleDigest",
+    "DigestEntry",
+    "DailyDigest",
     "Subscriber",
+    "UserDigestRanking",
     "utc_now",
     # Session & Engine
     "engine",
@@ -47,5 +64,7 @@ __all__ = [
     "SourceRepository",
     "ArticleRepository",
     "DigestRepository",
+    "ArticleDigestRepository",
+    "UserDigestRankingRepository",
     "SubscriberRepository",
 ]

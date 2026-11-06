@@ -109,6 +109,24 @@ def create_tables(
 
     logger.info("Creating tables: %s", ", ".join(Base.metadata.tables.keys()))
     Base.metadata.create_all(bind=eng)
+
+    # Ensure any newly added columns exist in existing tables (e.g. subscribers)
+    try:
+        from sqlalchemy import text
+
+        with eng.connect() as conn:
+            conn.execute(text("ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS bio_or_role VARCHAR(255);"))
+            conn.execute(text("ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS expertise_level VARCHAR(50) DEFAULT 'intermediate';"))
+            conn.execute(text("ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS interests JSON DEFAULT '[]';"))
+            conn.execute(text("ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS preferred_sources JSON DEFAULT '[]';"))
+            conn.execute(text("ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS ranking_instructions TEXT;"))
+            conn.execute(text("ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();"))
+            conn.execute(text("ALTER TABLE user_digest_rankings ADD COLUMN IF NOT EXISTS tier VARCHAR(50) DEFAULT 'featured';"))
+            conn.execute(text("ALTER TABLE user_digest_rankings ADD COLUMN IF NOT EXISTS quick_summary TEXT;"))
+            conn.commit()
+    except Exception as e:
+        logger.debug("Column migration note: %s", e)
+
     logger.info("✅ Successfully created all database tables!")
 
     if seed_defaults:
@@ -175,4 +193,8 @@ def main() -> None:
     except Exception as e:
         print(f"\n❌ Failed to initialize tables: {e}\n")
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
 

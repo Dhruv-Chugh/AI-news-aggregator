@@ -26,11 +26,13 @@ from sqlalchemy import func, inspect, select, text
 
 from app.database import (
     Article,
+    ArticleDigest,
     Base,
     Digest,
     NewsRepository,
     Source,
     Subscriber,
+    UserDigestRanking,
     check_connection,
     create_tables,
     engine,
@@ -150,14 +152,51 @@ def run_checks() -> bool:
         session.flush()
         print(f"   🟢 Digest created: id={digest.id}, date={digest.digest_date}")
 
+        # Test ArticleDigest creation in table 'digest'
+        art_digest = repo.article_digests.create(
+            article_id=art_id,
+            title=art.title,
+            url=art.url,
+            source_name="Verification AI Labs",
+            source_type="test_source",
+            summary="Half-page verification summary...",
+            problem_statement="Test problem",
+            solution_statement="Test solution",
+            key_insights=["Insight 1", "Insight 2"],
+            model_used="test:model",
+            tokens_used=123,
+        )
+        session.flush()
+        assert art_digest.id is not None
+        assert repo.article_digests.get_by_article_id(art_id) is not None
+        print(f"   🟢 ArticleDigest created in table 'digest': id={art_digest.id}, model='{art_digest.model_used}'")
+
         # Test Subscriber registration & lowercasing
         sub = repo.subscribers.create(
             email="TestUser.AI@Example.COM",
             name="Test User",
+            bio_or_role="AI Researcher",
+            expertise_level="advanced",
+            interests=["machine learning", "agents"],
         )
         session.flush()
         assert sub.email == "testuser.ai@example.com"
-        print(f"   🟢 Subscriber created with case normalization: '{sub.email}'")
+        assert "agents" in sub.interests
+        print(f"   🟢 Subscriber created with case normalization: '{sub.email}', role='{sub.bio_or_role}'")
+
+        # Test UserDigestRanking creation in table 'user_digest_rankings'
+        user_ranking = repo.user_rankings.create(
+            subscriber_id=sub.id,
+            digest_id=art_digest.id,
+            rank_position=1,
+            rank_score=98.5,
+            relevance_reasoning="Direct alignment with machine learning & agents research focus.",
+            key_takeaways_for_user=["Takeaway 1", "Takeaway 2"],
+        )
+        session.flush()
+        assert user_ranking.id is not None
+        assert repo.user_rankings.get_rankings_for_subscriber(sub.id)[0].rank_score == 98.5
+        print(f"   🟢 UserDigestRanking created in 'user_digest_rankings': id={user_ranking.id}, score={user_ranking.rank_score}")
 
         # 4. Timezone & Lookback Window Queries
         print("\n4️⃣ Testing Lookback Window & Timezone filtering...")

@@ -65,6 +65,8 @@ class AggregationResult(BaseModel):
     db_new_items: int = 0
     db_updated_items: int = 0
     cleaned_shorts: int = 0
+    summaries_created: int = 0
+    rankings_created: int = 0
 
     @property
     def total_items(self) -> int:
@@ -100,6 +102,12 @@ class AggregationResult(BaseModel):
             print(f"  • Database Sync:      ✅ Saved {self.db_items_saved} items ({self.db_new_items} new, {self.db_updated_items} updated)")
         else:
             print("  • Database Sync:      ⚪ Not synced (DB offline or skipped)")
+
+        if self.summaries_created > 0:
+            print(f"  • LLM Summaries:      🤖 {self.summaries_created} half-page digest(s) saved to 'digest'")
+
+        if self.rankings_created > 0:
+            print(f"  • User Rankings:      🎯 {self.rankings_created} personalized ranking(s) saved to 'user_digest_rankings'")
 
         if self.cleaned_shorts > 0:
             print(f"  • Shorts Removed:     🗑️ {self.cleaned_shorts} short(s) cleaned from DB")
@@ -215,6 +223,11 @@ class AggregationRunner:
         fetch_full_content: bool = True,
         sync_to_db: bool = True,
         db_repo: Optional[NewsRepository] = None,
+        summarize: bool = False,
+        rank: bool = False,
+        force_summarize: bool = False,
+        provider: str = "gemini",
+        max_per_source: int = 2,
     ) -> AggregationResult:
         """Execute unified ingestion across active sources and sync to database."""
         eff_hours = hours if hours is not None else hours_back
@@ -292,6 +305,38 @@ class AggregationRunner:
             if "error" in db_stats:
                 warnings.append(f"Database sync warning: {db_stats['error']}")
 
+        # 5. LLM Summarization into table 'digest'
+        summaries_created = 0
+        if summarize and db_synced:
+            try:
+                from app.agent.summarizer import DigestAgent
+
+                logger.info("Executing LLM summarization pipeline into table 'digest' (provider=%s)...", provider)
+                with DigestAgent(preferred_provider=provider) as agent:
+                    rep = agent.run(force=force_summarize)
+                    summaries_created = rep.successful
+                    logger.info("Synthesized %d article digests into table 'digest'.", rep.successful)
+            except Exception as e:
+                msg = f"LLM Summarizer warning: {e}"
+                logger.warning(msg)
+                warnings.append(msg)
+
+        # 6. Personalized User Ranking into table 'user_digest_rankings'
+        rankings_created = 0
+        if rank and db_synced:
+            try:
+                from app.agent.ranking_agent import UserRankingAgent
+
+                logger.info("Executing personalized user interest ranking pipeline (provider=%s)...", provider)
+                with UserRankingAgent(preferred_provider=provider) as ranking_agent:
+                    rank_rep = ranking_agent.run_daily_ranking(max_per_source=max_per_source)
+                    rankings_created = rank_rep.rankings_stored
+                    logger.info("Persisted %d personalized rankings into 'user_digest_rankings'.", rank_rep.rankings_stored)
+            except Exception as e:
+                msg = f"User Ranking Agent warning: {e}"
+                logger.warning(msg)
+                warnings.append(msg)
+
         return AggregationResult(
             executed_at=datetime.now(timezone.utc),
             hours_back=actual_hours,
@@ -305,6 +350,8 @@ class AggregationRunner:
             db_new_items=db_new_items,
             db_updated_items=db_updated_items,
             cleaned_shorts=cleaned_shorts,
+            summaries_created=summaries_created,
+            rankings_created=rankings_created,
         )
 
 
@@ -318,6 +365,11 @@ def run_news_aggregation(
     fetch_full_content: bool = True,
     sync_to_db: bool = True,
     db_repo: Optional[NewsRepository] = None,
+    summarize: bool = False,
+    rank: bool = False,
+    force_summarize: bool = False,
+    provider: str = "gemini",
+    max_per_source: int = 2,
 ) -> AggregationResult:
     """Streamlined function to run the complete pipeline in one call."""
     effective_hours = hours if hours is not None else hours_back
@@ -331,6 +383,11 @@ def run_news_aggregation(
             fetch_full_content=fetch_full_content,
             sync_to_db=sync_to_db,
             db_repo=db_repo,
+            summarize=summarize,
+            rank=rank,
+            force_summarize=force_summarize,
+            provider=provider,
+            max_per_source=max_per_source,
         )
 
 
@@ -379,6 +436,38 @@ def main() -> None:
         "--llm-markdown",
         action="store_true",
         help="Export database entries formatted as clean Markdown for LLMs",
+    )
+    parser.add_argument(
+        "--summarize",
+        action="store_true",
+        help="Run AI Digest Agent after scraping to summarize articles into table 'digest'",
+    )
+    parser.add_argument(
+        "--rank",
+        action="store_true",
+        help="Run Personalized User Interest Ranking Agent after summarization",
+    )
+    parser.add_argument(
+        "--full-pipeline",
+        action="store_true",
+        help="Run the complete pipeline: scrape all sources -> save to DB -> LLM summary into 'digest' -> personalized ranking",
+    )
+    parser.add_argument(
+        "--force-summarize",
+        action="store_true",
+        help="Force re-summarization of already summarized articles",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=["gemini", "openai", "auto"],
+        default="gemini",
+        help="LLM provider strategy",
+    )
+    parser.add_argument(
+        "--max-per-source",
+        type=int,
+        default=2,
+        help="Maximum top items to include per source in personalized rankings (default: 2)",
     )
     parser.add_argument("--no-db", action="store_true", help="Skip saving scraped items to database")
     parser.add_argument("--no-yt", action="store_true", help="Skip YouTube")
@@ -437,6 +526,8 @@ def main() -> None:
         return
 
     hours_to_use = 0 if args.all else args.hours
+    should_summarize = (args.summarize or args.full_pipeline) and not args.no_db
+    should_rank = (args.rank or args.full_pipeline) and not args.no_db
 
     print(f"\n🚀 Running AI News Aggregator ({'All history' if hours_to_use == 0 else f'Last {hours_to_use} hours'})...")
     result = run(
@@ -447,6 +538,11 @@ def main() -> None:
         fetch_transcripts=not args.no_transcripts,
         fetch_full_content=not args.no_content,
         sync_to_db=not args.no_db,
+        summarize=should_summarize,
+        rank=should_rank,
+        force_summarize=args.force_summarize,
+        provider=args.provider,
+        max_per_source=args.max_per_source,
     )
     result.print_summary()
 

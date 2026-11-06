@@ -17,7 +17,15 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from app.database.models import Article, Digest, Source, Subscriber, utc_now
+from app.database.models import (
+    Article,
+    ArticleDigest,
+    Digest,
+    Source,
+    Subscriber,
+    UserDigestRanking,
+    utc_now,
+)
 from app.database.session import SessionLocal, get_db_session
 
 logger = logging.getLogger("ai_news.repository")
@@ -445,15 +453,181 @@ class DigestRepository(BaseRepository):
         return list(self.session.execute(stmt).scalars().all())
 
 
-class SubscriberRepository(BaseRepository):
-    """CRUD operations for email subscribers."""
+class ArticleDigestRepository(BaseRepository):
+    """CRUD operations for individual article/video summaries in table 'digest'."""
 
-    def create(self, email: str, name: Optional[str] = None, is_active: bool = True) -> Subscriber:
-        """Register a new email subscriber."""
-        subscriber = Subscriber(email=email.strip().lower(), name=name, is_active=is_active)
+    def create(
+        self,
+        article_id: int,
+        title: str,
+        url: str,
+        source_name: str,
+        source_type: str,
+        summary: str,
+        problem_statement: Optional[str] = None,
+        solution_statement: Optional[str] = None,
+        key_insights: Optional[List[str]] = None,
+        model_used: str = "openai:responses",
+        category: Optional[str] = None,
+        tokens_used: Optional[int] = None,
+    ) -> ArticleDigest:
+        """Create and store an article digest entry in table 'digest'."""
+        digest_entry = ArticleDigest(
+            article_id=article_id,
+            title=title,
+            url=url,
+            source_name=source_name,
+            source_type=source_type,
+            summary=summary,
+            problem_statement=problem_statement,
+            solution_statement=solution_statement,
+            key_insights=key_insights,
+            model_used=model_used,
+            category=category,
+            tokens_used=tokens_used,
+        )
+        self.session.add(digest_entry)
+        self.session.flush()
+        return digest_entry
+
+    def get_by_id(self, digest_id: int) -> Optional[ArticleDigest]:
+        """Find digest entry by primary key ID."""
+        return self.session.get(ArticleDigest, digest_id)
+
+    def get_by_article_id(self, article_id: int) -> Optional[ArticleDigest]:
+        """Find digest entry by foreign key article_id."""
+        stmt = select(ArticleDigest).where(ArticleDigest.article_id == article_id)
+        return self.session.execute(stmt).scalar_one_or_none()
+
+    def upsert(
+        self,
+        article_id: int,
+        title: str,
+        url: str,
+        source_name: str,
+        source_type: str,
+        summary: str,
+        problem_statement: Optional[str] = None,
+        solution_statement: Optional[str] = None,
+        key_insights: Optional[List[str]] = None,
+        model_used: str = "openai:responses",
+        category: Optional[str] = None,
+        tokens_used: Optional[int] = None,
+    ) -> Tuple[ArticleDigest, bool]:
+        """Upsert a digest entry for an article. Returns (entry, created)."""
+        existing = self.get_by_article_id(article_id)
+        if existing:
+            existing.title = title
+            existing.url = url
+            existing.source_name = source_name
+            existing.source_type = source_type
+            existing.summary = summary
+            existing.problem_statement = problem_statement
+            existing.solution_statement = solution_statement
+            existing.key_insights = key_insights
+            existing.model_used = model_used
+            existing.category = category
+            existing.tokens_used = tokens_used
+            existing.updated_at = utc_now()
+            self.session.flush()
+            return existing, False
+
+        new_entry = self.create(
+            article_id=article_id,
+            title=title,
+            url=url,
+            source_name=source_name,
+            source_type=source_type,
+            summary=summary,
+            problem_statement=problem_statement,
+            solution_statement=solution_statement,
+            key_insights=key_insights,
+            model_used=model_used,
+            category=category,
+            tokens_used=tokens_used,
+        )
+        return new_entry, True
+
+    def get_all(
+        self,
+        limit: int = 100,
+        source_type: Optional[str] = None,
+    ) -> List[ArticleDigest]:
+        """List all article digest entries, optionally filtered by source_type."""
+        stmt = select(ArticleDigest).order_by(desc(ArticleDigest.created_at))
+        if source_type:
+            stmt = stmt.where(ArticleDigest.source_type == source_type)
+        stmt = stmt.limit(limit)
+        return list(self.session.execute(stmt).scalars().all())
+
+    def delete_by_article_id(self, article_id: int) -> bool:
+        """Delete an article digest entry by article_id."""
+        existing = self.get_by_article_id(article_id)
+        if not existing:
+            return False
+        self.session.delete(existing)
+        self.session.flush()
+        return True
+
+
+class SubscriberRepository(BaseRepository):
+    """CRUD operations for email subscribers and user interest profiles."""
+
+    def create(
+        self,
+        email: str,
+        name: Optional[str] = None,
+        is_active: bool = True,
+        bio_or_role: Optional[str] = None,
+        expertise_level: str = "intermediate",
+        interests: Optional[List[str]] = None,
+        preferred_sources: Optional[List[str]] = None,
+        ranking_instructions: Optional[str] = None,
+    ) -> Subscriber:
+        """Register a new email subscriber with profile interests."""
+        subscriber = Subscriber(
+            email=email.strip().lower(),
+            name=name,
+            is_active=is_active,
+            bio_or_role=bio_or_role,
+            expertise_level=expertise_level,
+            interests=interests or [],
+            preferred_sources=preferred_sources or [],
+            ranking_instructions=ranking_instructions,
+        )
         self.session.add(subscriber)
         self.session.flush()
         return subscriber
+
+    def update_profile(
+        self,
+        email: str,
+        name: Optional[str] = None,
+        bio_or_role: Optional[str] = None,
+        expertise_level: Optional[str] = None,
+        interests: Optional[List[str]] = None,
+        preferred_sources: Optional[List[str]] = None,
+        ranking_instructions: Optional[str] = None,
+    ) -> Optional[Subscriber]:
+        """Update user profile preferences and ranking interests."""
+        sub = self.get_by_email(email)
+        if not sub:
+            return None
+        if name is not None:
+            sub.name = name
+        if bio_or_role is not None:
+            sub.bio_or_role = bio_or_role
+        if expertise_level is not None:
+            sub.expertise_level = expertise_level
+        if interests is not None:
+            sub.interests = interests
+        if preferred_sources is not None:
+            sub.preferred_sources = preferred_sources
+        if ranking_instructions is not None:
+            sub.ranking_instructions = ranking_instructions
+        sub.updated_at = utc_now()
+        self.session.flush()
+        return sub
 
     def get_by_id(self, subscriber_id: int) -> Optional[Subscriber]:
         """Get subscriber by ID."""
@@ -493,6 +667,69 @@ class SubscriberRepository(BaseRepository):
         return True
 
 
+class UserDigestRankingRepository(BaseRepository):
+    """CRUD operations for personalized subscriber rankings in table 'user_digest_rankings'."""
+
+    def create(
+        self,
+        subscriber_id: int,
+        digest_id: int,
+        rank_position: int,
+        rank_score: float,
+        relevance_reasoning: str,
+        key_takeaways_for_user: Optional[List[str]] = None,
+        batch_date: Optional[date] = None,
+        tier: str = "featured",
+        quick_summary: Optional[str] = None,
+    ) -> UserDigestRanking:
+        """Create and persist a personalized ranking entry."""
+        entry = UserDigestRanking(
+            subscriber_id=subscriber_id,
+            digest_id=digest_id,
+            rank_position=rank_position,
+            rank_score=rank_score,
+            relevance_reasoning=relevance_reasoning,
+            key_takeaways_for_user=key_takeaways_for_user or [],
+            batch_date=batch_date or utc_now().date(),
+            tier=tier,
+            quick_summary=quick_summary,
+        )
+        self.session.add(entry)
+        self.session.flush()
+        return entry
+
+    def get_rankings_for_subscriber(
+        self,
+        subscriber_id: int,
+        batch_date: Optional[date] = None,
+        limit: int = 50,
+    ) -> List[UserDigestRanking]:
+        """Fetch ranked summaries for a subscriber ordered by rank_position asc."""
+        stmt = (
+            select(UserDigestRanking)
+            .where(UserDigestRanking.subscriber_id == subscriber_id)
+            .order_by(UserDigestRanking.rank_position.asc())
+        )
+        if batch_date:
+            stmt = stmt.where(UserDigestRanking.batch_date == batch_date)
+        stmt = stmt.limit(limit)
+        return list(self.session.execute(stmt).scalars().all())
+
+    def clear_subscriber_batch(self, subscriber_id: int, batch_date: date) -> int:
+        """Clear existing rankings for a subscriber on a specific date before re-ranking."""
+        stmt = select(UserDigestRanking).where(
+            UserDigestRanking.subscriber_id == subscriber_id,
+            UserDigestRanking.batch_date == batch_date,
+        )
+        records = list(self.session.execute(stmt).scalars().all())
+        count = len(records)
+        for r in records:
+            self.session.delete(r)
+        if count > 0:
+            self.session.flush()
+        return count
+
+
 class NewsRepository:
     """Master Unit-of-Work aggregator coordinating all repository operations.
 
@@ -512,7 +749,9 @@ class NewsRepository:
         self.sources = SourceRepository(self.session)
         self.articles = ArticleRepository(self.session)
         self.digests = DigestRepository(self.session)
+        self.article_digests = ArticleDigestRepository(self.session)
         self.subscribers = SubscriberRepository(self.session)
+        self.user_rankings = UserDigestRankingRepository(self.session)
 
     def __enter__(self) -> NewsRepository:
         return self
