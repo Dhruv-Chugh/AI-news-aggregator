@@ -25,6 +25,8 @@ def run_ranking_job(
     provider: str = "gemini",
     hours: int = 24,
     max_per_source: int = 2,
+    deliver_email: bool = True,
+    send_live: bool = False,
 ) -> None:
     """Scheduled task executed every 24 hours."""
     from app.agent.ranking_agent import UserRankingAgent
@@ -38,6 +40,17 @@ def run_ranking_job(
                 report.subscribers_evaluated,
                 report.rankings_stored,
             )
+
+        if deliver_email and report.rankings_stored > 0:
+            try:
+                from app.agent.email_agent import EmailDeliveryAgent
+
+                logger.info("📬 Generating and dispatching visual PDF intelligence briefings...")
+                with EmailDeliveryAgent() as email_agent:
+                    deliv_rep = email_agent.run_daily_delivery(send_live=send_live)
+                    logger.info("✅ Daily email briefing completed: %d generated.", deliv_rep.briefings_generated)
+            except Exception as e:
+                logger.warning("Email delivery step warning: %s", e)
     except Exception as e:
         logger.error("❌ Scheduled ranking cycle failed: %s", e, exc_info=True)
 

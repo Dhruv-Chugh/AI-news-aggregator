@@ -6,6 +6,7 @@ Provides:
 - RankingSchedulerService: Runs the personalized ranking agent every 24 hours
 """
 
+from app.agent.email_agent import EmailBatchDeliveryReport, EmailDeliveryAgent
 from app.agent.llm_client import DualLLMClient, estimate_tokens
 from app.agent.ranking_agent import UserRankingAgent
 from app.agent.ranking_schemas import (
@@ -37,4 +38,7 @@ __all__ = [
     # 24-Hour Scheduler
     "RankingSchedulerService",
     "start_ranking_scheduler",
+    # Email Delivery Agent
+    "EmailDeliveryAgent",
+    "EmailBatchDeliveryReport",
 ]

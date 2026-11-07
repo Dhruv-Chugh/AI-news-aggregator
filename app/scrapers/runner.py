@@ -67,6 +67,8 @@ class AggregationResult(BaseModel):
     cleaned_shorts: int = 0
     summaries_created: int = 0
     rankings_created: int = 0
+    briefings_delivered: int = 0
+    pdf_path: Optional[str] = None
 
     @property
     def total_items(self) -> int:
@@ -108,6 +110,11 @@ class AggregationResult(BaseModel):
 
         if self.rankings_created > 0:
             print(f"  • User Rankings:      🎯 {self.rankings_created} personalized ranking(s) saved to 'user_digest_rankings'")
+
+        if self.briefings_delivered > 0:
+            print(f"  • PDF Briefing:       📬 {self.briefings_delivered} visual PDF briefing(s) generated")
+            if self.pdf_path:
+                print(f"  • PDF Location:       📄 {self.pdf_path}")
 
         if self.cleaned_shorts > 0:
             print(f"  • Shorts Removed:     🗑️ {self.cleaned_shorts} short(s) cleaned from DB")
@@ -225,6 +232,8 @@ class AggregationRunner:
         db_repo: Optional[NewsRepository] = None,
         summarize: bool = False,
         rank: bool = False,
+        email_briefing: bool = False,
+        send_live_email: bool = False,
         force_summarize: bool = False,
         provider: str = "gemini",
         max_per_source: int = 2,
@@ -337,6 +346,25 @@ class AggregationRunner:
                 logger.warning(msg)
                 warnings.append(msg)
 
+        # 7. Visual PDF & Email Briefing Delivery
+        briefings_delivered = 0
+        pdf_path: Optional[str] = None
+        if email_briefing and db_synced:
+            try:
+                from app.agent.email_agent import EmailDeliveryAgent
+
+                logger.info("Executing Visual PDF & Email Briefing delivery agent...")
+                with EmailDeliveryAgent() as email_agent:
+                    deliv_rep = email_agent.run_daily_delivery(send_live=send_live_email)
+                    briefings_delivered = deliv_rep.briefings_generated
+                    if deliv_rep.results:
+                        pdf_path = deliv_rep.results[0].get("pdf_path")
+                    logger.info("Delivered/exported %d visual PDF intelligence briefings.", deliv_rep.briefings_generated)
+            except Exception as e:
+                msg = f"Email Delivery Agent warning: {e}"
+                logger.warning(msg)
+                warnings.append(msg)
+
         return AggregationResult(
             executed_at=datetime.now(timezone.utc),
             hours_back=actual_hours,
@@ -352,6 +380,8 @@ class AggregationRunner:
             cleaned_shorts=cleaned_shorts,
             summaries_created=summaries_created,
             rankings_created=rankings_created,
+            briefings_delivered=briefings_delivered,
+            pdf_path=pdf_path,
         )
 
 
@@ -367,6 +397,8 @@ def run_news_aggregation(
     db_repo: Optional[NewsRepository] = None,
     summarize: bool = False,
     rank: bool = False,
+    email_briefing: bool = False,
+    send_live_email: bool = False,
     force_summarize: bool = False,
     provider: str = "gemini",
     max_per_source: int = 2,
@@ -385,6 +417,8 @@ def run_news_aggregation(
             db_repo=db_repo,
             summarize=summarize,
             rank=rank,
+            email_briefing=email_briefing,
+            send_live_email=send_live_email,
             force_summarize=force_summarize,
             provider=provider,
             max_per_source=max_per_source,
@@ -448,9 +482,19 @@ def main() -> None:
         help="Run Personalized User Interest Ranking Agent after summarization",
     )
     parser.add_argument(
+        "--email",
+        action="store_true",
+        help="Generate visual PDF intelligence briefing and deliver via email",
+    )
+    parser.add_argument(
+        "--send-email",
+        action="store_true",
+        help="Send email live via SMTP instead of local export",
+    )
+    parser.add_argument(
         "--full-pipeline",
         action="store_true",
-        help="Run the complete pipeline: scrape all sources -> save to DB -> LLM summary into 'digest' -> personalized ranking",
+        help="Run the complete pipeline: scrape all sources -> save to DB -> LLM summary into 'digest' -> personalized ranking -> visual PDF email delivery",
     )
     parser.add_argument(
         "--force-summarize",
@@ -528,6 +572,7 @@ def main() -> None:
     hours_to_use = 0 if args.all else args.hours
     should_summarize = (args.summarize or args.full_pipeline) and not args.no_db
     should_rank = (args.rank or args.full_pipeline) and not args.no_db
+    should_email = (args.email or args.full_pipeline) and not args.no_db
 
     print(f"\n🚀 Running AI News Aggregator ({'All history' if hours_to_use == 0 else f'Last {hours_to_use} hours'})...")
     result = run(
@@ -540,6 +585,8 @@ def main() -> None:
         sync_to_db=not args.no_db,
         summarize=should_summarize,
         rank=should_rank,
+        email_briefing=should_email,
+        send_live_email=args.send_email,
         force_summarize=args.force_summarize,
         provider=args.provider,
         max_per_source=args.max_per_source,

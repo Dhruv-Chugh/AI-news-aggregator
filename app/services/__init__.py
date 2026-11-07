@@ -4,12 +4,14 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.services.content_extractor import ArticleContentExtractor, ExtractedContent
+    from app.services.email_service import EmailSendResult, EmailService
     from app.services.llm_formatter import (
         LLMMarkdownFormatter,
         format_article_for_llm,
         format_articles_for_llm,
         get_database_llm_markdown,
     )
+    from app.services.pdf_generator import PDFReportGenerator
     from app.services.transcript_service import (
         TranscriptCleaner,
         TranscriptIdParser,
@@ -26,6 +28,9 @@ __all__ = [
     "format_article_for_llm",
     "format_articles_for_llm",
     "get_database_llm_markdown",
+    "PDFReportGenerator",
+    "EmailService",
+    "EmailSendResult",
 ]
 
 
@@ -44,5 +49,11 @@ def __getattr__(name: str):
         "get_database_llm_markdown",
     ):
         import app.services.llm_formatter as mod
+        return getattr(mod, name)
+    if name in ("PDFReportGenerator",):
+        import app.services.pdf_generator as mod
+        return getattr(mod, name)
+    if name in ("EmailService", "EmailSendResult"):
+        import app.services.email_service as mod
         return getattr(mod, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
